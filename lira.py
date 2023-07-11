@@ -194,31 +194,7 @@ def respond(texts,
 			buffer = ""
 		yield ""
 
-def infer(text, wg, t2, dn, aud):
-	print("\nStarting inference")
-	sequences_padded, input_lengths = prepare_input_sequence([text])
-	with torch.no_grad():
-		mel, mel_lengths, alignments = t2(sequences_padded, input_lengths)
-		audios = wg(mel, sigma=0.9)
-		audios = audios.float()
-		audios = dn(audios, strength=0.01).squeeze(1)
-
-	numChannels = 1
-	sampleRate = 22050
-	stream = aud.open(format=pyaudio.paFloat32, channels=numChannels, rate=sampleRate, output=True)
-	for i, audio in enumerate(audios):
-		audio = audio[:mel_lengths[i]*256]
-		audio = audio/torch.max(torch.abs(audio))
-		stream.write(audio.cpu().numpy().tobytes())
-	stream.stop_stream()  
-	stream.close()
-
-	print("Done")
-
 def speak(texts, parser):
-	global cond
-	global state
-	
 	tacotron2 = load_and_setup_model('Tacotron2', parser, "tacotronModel", False, True, forward_is_infer=True)
 	waveglow = load_and_setup_model('WaveGlow', parser, "waveglowModel", False, True, forward_is_infer=True, jittable=True)
 
@@ -226,24 +202,13 @@ def speak(texts, parser):
 	waveglow.make_ts_scriptable()
 	wg = torch.jit.script(waveglow)
 	t2 = torch.jit.script(tacotron2)
-	aud = pyaudio.PyAudio()
 
 	buffer = ""
-	ready = False
 	for text in texts:
 		if len(text) == 0:
-			print("")
-			with cond:
-				while state != 1:
-					cond.wait()
-				if ready and len(buffer) > 0:
-					infer(buffer, wg, t2, dn, stream)
-					buffer = ""
-				state = 0
-				cond.notify()
+			yield ""
 		else:
 			buffer += text
-			print(text, end="", flush=True)
 			hasSpeakable = False
 			for c in buffer:
 				if c.isalnum():
@@ -251,18 +216,51 @@ def speak(texts, parser):
 					break
 
 			if hasSpeakable:
-				ready = True
-				with cond:
-					if state == 1 and len(buffer) > 0:
-						infer(buffer, wg, t2, dn, aud)
-						buffer = ""
+				print("\nStarting inference")
+				sequences_padded, input_lengths = prepare_input_sequence([buffer])
+				with torch.no_grad():
+					mel, mel_lengths, alignments = t2(sequences_padded, input_lengths)
+					audios = wg(mel, sigma=0.9)
+					audios = audios.float()
+					audios = dn(audios, strength=0.01).squeeze(1)
+
+				for i, audio in enumerate(audios):
+					audio = audio[:mel_lengths[i]*256]
+					audio = audio/torch.max(torch.abs(audio))
+					yield audio.cpu().numpy().tobytes()
+				print("Done")
+				buffer = ""
+
+def play(audios):
+	global cond
+	global state
+	
+	aud = pyaudio.PyAudio()
+	
+	for audio in audios:
+		if len(audio) == 0:
+			with cond:
+				while state != 1:
+					cond.wait()
+				state = 0
+				cond.notify()
+		else:
+			with cond:
+				if state == 1:
+					numChannels = 1
+					sampleRate = 22050
+					stream = aud.open(format=pyaudio.paFloat32, channels=numChannels, rate=sampleRate, output=True)
+					stream.write(audio)
+					stream.stop_stream()  
+					stream.close()
 
 	aud.terminate()
-  
+ 
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser(description='PyTorch Tacotron 2 Inference')
 
 	buffer_iterable = buffered_pipeline()
 	text = buffer_iterable(listen())
 	output = buffer_iterable(respond(text))
-	speak(output, parser)
+	audios = buffer_iterable(speak(output, parser))
+	play(audios)
