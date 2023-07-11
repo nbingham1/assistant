@@ -159,7 +159,7 @@ def respond(texts,
 	top_p=0.5,
 	echo=False,
 	stop=["\""]):
-	llm = Llama(model_path="ggml-vicuna-7b-1.1-q4_1.bin", n_ctx=512, n_batch=126, last_n_tokens_size=1024, verbose=False)
+	llm = Llama(model_path="vicunaModel.bin", n_ctx=512, n_batch=126, last_n_tokens_size=1024, verbose=False)
 	prompt = "Lira is listening to a conversation between her friends, and occationally interjects to provide helpful suggestions using simple and concise language. "
 	buffer = ""
 	code = False
